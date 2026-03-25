@@ -36,7 +36,13 @@ def sign(message):
 def get_candles(symbol):
     url = f"{BASE_URL}/api/mix/v1/market/candles?symbol={symbol}&granularity=300&limit=100"
     res = requests.get(url).json()
-    return res
+
+    # FIX: handle API structure safely
+    if 'data' not in res or not isinstance(res['data'], list):
+        print(f"API ERROR for {symbol}: ", res)
+        return []
+
+    return res['data']
 
 # ================= INDICATORS =================
 def ema(data, period=50):
@@ -55,9 +61,21 @@ def rsi(data, period=14):
 # ================= AI SIGNAL =================
 def analyze(symbol):
     candles = get_candles(symbol)
-    closes = [float(x[4]) for x in candles]
-    highs = [float(x[2]) for x in candles]
-    lows = [float(x[3]) for x in candles]
+
+    # FIX: avoid crash when no data
+    if not candles or len(candles) < 20:
+        return None
+
+    try:
+        closes = [float(x[4]) for x in candles if len(x) > 4]
+        highs = [float(x[2]) for x in candles if len(x) > 2]
+        lows = [float(x[3]) for x in candles if len(x) > 3]
+    except Exception as e:
+        print("DATA PARSE ERROR:", e)
+        return None
+
+    if len(closes) < 20:
+        return None
 
     current = closes[-1]
     prev_high = max(highs[-10:-1])
@@ -135,7 +153,10 @@ def run_bot():
                 signal = analyze(symbol)
 
                 if signal:
-                    price = float(get_candles(symbol)[-1][4])
+                    candles = get_candles(symbol)
+                    if not candles:
+                        continue
+                    price = float(candles[-1][4])
                     size = calc_size(balance, price)
 
                     print(f"{symbol} | {signal} | Size: {size}")
