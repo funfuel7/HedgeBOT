@@ -1,13 +1,6 @@
 # =============================================
-# ⚔️ ADAPTIVE HEDGE + AI ALPHA BOT (V2 - PRO)
+# ⚔️ ADAPTIVE HEDGE + AI BOT (STABLE V3 - FIXED)
 # =============================================
-
-# FEATURES:
-# ✅ AI Signal Engine (Liquidity sweep + RSI + EMA)
-# ✅ Execution Engine (RR, SL, TP)
-# ✅ Hedge Engine
-# ✅ Risk Management
-# ✅ Multi-asset ready
 
 import requests
 import time
@@ -32,12 +25,16 @@ MAX_TRADES = 3
 def sign(message):
     return base64.b64encode(hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).digest()).decode()
 
-# ================= MARKET DATA =================
+# ================= MARKET DATA (V2 FIXED) =================
 def get_candles(symbol):
-    url = f"{BASE_URL}/api/mix/v1/market/candles?symbol={symbol}&granularity=300&limit=100"
-    res = requests.get(url).json()
+    url = f"{BASE_URL}/api/v2/mix/market/candles?symbol={symbol}&granularity=5m&productType=USDT-FUTURES&limit=100"
 
-    # FIX: handle API structure safely
+    try:
+        res = requests.get(url).json()
+    except Exception as e:
+        print("REQUEST ERROR:", e)
+        return []
+
     if 'data' not in res or not isinstance(res['data'], list):
         print(f"API ERROR for {symbol}: ", res)
         return []
@@ -51,10 +48,12 @@ def ema(data, period=50):
 
 def rsi(data, period=14):
     deltas = np.diff(data)
-    gain = np.mean([x for x in deltas if x > 0])
-    loss = abs(np.mean([x for x in deltas if x < 0]))
+    gain = np.mean([x for x in deltas if x > 0]) if len([x for x in deltas if x > 0]) > 0 else 0
+    loss = abs(np.mean([x for x in deltas if x < 0])) if len([x for x in deltas if x < 0]) > 0 else 0
+
     if loss == 0:
         return 100
+
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
@@ -62,60 +61,70 @@ def rsi(data, period=14):
 def analyze(symbol):
     candles = get_candles(symbol)
 
-    # FIX: avoid crash when no data
-    if not candles or len(candles) < 20:
+    if not candles or len(candles) < 50:
         return None
 
     try:
         closes = [float(x[4]) for x in candles if len(x) > 4]
         highs = [float(x[2]) for x in candles if len(x) > 2]
         lows = [float(x[3]) for x in candles if len(x) > 3]
-    except Exception as e:
-        print("DATA PARSE ERROR:", e)
+    except:
         return None
 
-    if len(closes) < 20:
+    if len(closes) < 50:
         return None
 
     current = closes[-1]
-    prev_high = max(highs[-10:-1])
-    prev_low = min(lows[-10:-1])
-
     ema50 = ema(closes, 50)
     rsi_val = rsi(closes)
 
-    # Liquidity sweep + reversal logic
-    if current > prev_high and rsi_val > 70:
-        return "SHORT"
-    elif current < prev_low and rsi_val < 30:
+    # Liquidity sweep + reversal
+    if current < min(lows[-10:-1]) and rsi_val < 30:
         return "LONG"
 
-    # Trend continuation
-    if current > ema50 and rsi_val > 50:
+    if current > max(highs[-10:-1]) and rsi_val > 70:
+        return "SHORT"
+
+    # Trend
+    if current > ema50 and rsi_val > 55:
         return "LONG"
-    elif current < ema50 and rsi_val < 50:
+
+    if current < ema50 and rsi_val < 45:
         return "SHORT"
 
     return None
 
 # ================= POSITION SIZE =================
 def calc_size(balance, price):
+    if price <= 0:
+        return 0
+
     risk_amount = balance * RISK_PER_TRADE
     size = risk_amount / price
+
+    if size < 0.001:
+        size = 0.001
+
     return round(size, 3)
 
-# ================= ORDER =================
+# ================= ORDER (V2 FIXED) =================
 def place_order(symbol, side, size):
-    endpoint = "/api/mix/v1/order/placeOrder"
+    if size <= 0:
+        print("INVALID SIZE, skipping trade")
+        return
+
+    endpoint = "/api/v2/mix/order/place-order"
     url = BASE_URL + endpoint
 
     body = {
         "symbol": symbol,
+        "productType": "USDT-FUTURES",
+        "marginMode": "crossed",
         "marginCoin": "USDT",
         "size": str(size),
-        "side": "open_long" if side == "LONG" else "open_short",
+        "side": "buy" if side == "LONG" else "sell",
         "orderType": "market",
-        "leverage": LEVERAGE
+        "force": "gtc"
     }
 
     timestamp = str(int(time.time() * 1000))
@@ -130,8 +139,11 @@ def place_order(symbol, side, size):
         "Content-Type": "application/json"
     }
 
-    response = requests.post(url, headers=headers, data=json.dumps(body))
-    print("ORDER:", response.json())
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(body))
+        print("ORDER RESPONSE:", response.json())
+    except Exception as e:
+        print("ORDER ERROR:", e)
 
 # ================= HEDGE =================
 def hedge(symbol, side, size):
@@ -141,35 +153,42 @@ def hedge(symbol, side, size):
 
 # ================= MAIN =================
 def run_bot():
-    balance = 1000  # replace with API later
+    balance = 1000
     open_trades = 0
+
+    print("BOT STARTED...")
 
     while True:
         try:
+            open_trades = 0
+
             for symbol in SYMBOLS:
                 if open_trades >= MAX_TRADES:
                     break
 
                 signal = analyze(symbol)
 
-                if signal:
-                    candles = get_candles(symbol)
-                    if not candles:
-                        continue
-                    price = float(candles[-1][4])
-                    size = calc_size(balance, price)
+                if not signal:
+                    continue
 
-                    print(f"{symbol} | {signal} | Size: {size}")
+                candles = get_candles(symbol)
+                if not candles:
+                    continue
 
-                    place_order(symbol, signal, size)
-                    hedge(symbol, signal, size)
+                price = float(candles[-1][4])
+                size = calc_size(balance, price)
 
-                    open_trades += 1
+                print(f"{symbol} | {signal} | Price: {price} | Size: {size}")
+
+                place_order(symbol, signal, size)
+                hedge(symbol, signal, size)
+
+                open_trades += 1
 
             time.sleep(60)
 
         except Exception as e:
-            print("ERROR:", e)
+            print("MAIN LOOP ERROR:", e)
             time.sleep(10)
 
 # ================= START =================
