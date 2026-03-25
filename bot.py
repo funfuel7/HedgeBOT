@@ -1,5 +1,5 @@
 # =============================================
-# ⚔️ FINAL BOT V5 (SL + TP + SAFE + ENV FIX)
+# ⚔️ FINAL BOT V6 (FIXED PRICE PRECISION + SL TP + SAFE)
 # =============================================
 
 import requests
@@ -26,6 +26,10 @@ open_positions = {}
 # ================= AUTH =================
 def sign(message):
     return base64.b64encode(hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).digest()).decode()
+
+# ================= HELPERS =================
+def round_price(price):
+    return round(price, 3)  # Bitget requires 0.001 precision
 
 # ================= MARKET DATA =================
 def get_candles(symbol):
@@ -101,8 +105,8 @@ def place_order(symbol, side, size, sl, tp):
         "size": str(size),
         "side": "buy" if side == "LONG" else "sell",
         "orderType": "market",
-        "presetStopLossPrice": str(sl),
-        "presetTakeProfitPrice": str(tp)
+        "presetStopLossPrice": str(round_price(sl)),
+        "presetTakeProfitPrice": str(round_price(tp))
     }
 
     timestamp = str(int(time.time() * 1000))
@@ -144,13 +148,13 @@ def run_bot():
             price = float(candles[-1][4])
             size = calc_size(balance, price)
 
-            # SL TP LOGIC
+            # SL TP FIXED PRECISION
             if signal == "LONG":
-                sl = price * 0.98
-                tp = price * 1.04
+                sl = round_price(price * 0.98)
+                tp = round_price(price * 1.04)
             else:
-                sl = price * 1.02
-                tp = price * 0.96
+                sl = round_price(price * 1.02)
+                tp = round_price(price * 0.96)
 
             print(f"{symbol} | {signal} | Price: {price} | SL: {sl} | TP: {tp}")
 
