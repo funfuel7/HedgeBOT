@@ -1,5 +1,5 @@
 # =============================================
-# ⚔️ FINAL PRO BOT (V4 - FULL 3 LAYER SYSTEM)
+# ⚔️ FINAL BOT V5 (SL + TP + SAFE + ENV FIX)
 # =============================================
 
 import requests
@@ -9,22 +9,19 @@ import hashlib
 import base64
 import json
 import numpy as np
+import os
 
 # ================= CONFIG =================
-API_KEY = "YOUR_API_KEY"
-API_SECRET = "YOUR_API_SECRET"
-PASSPHRASE = "YOUR_PASSPHRASE"
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
+PASSPHRASE = os.getenv("PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 
-# MULTI ASSET
-CRYPTO = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","SUIUSDT","PEPEUSDT"]
-STOCKS = ["NAS100USDT","SPXUSDT"]
-METALS = ["XAUUSDT","XAGUSDT"]
-
-SYMBOLS = CRYPTO + STOCKS + METALS
-
+SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT"]
 RISK_PER_TRADE = 0.01
-MAX_TRADES = 5
+MAX_TRADES = 3
+
+open_positions = {}
 
 # ================= AUTH =================
 def sign(message):
@@ -33,16 +30,11 @@ def sign(message):
 # ================= MARKET DATA =================
 def get_candles(symbol):
     url = f"{BASE_URL}/api/v2/mix/market/candles?symbol={symbol}&granularity=5m&productType=USDT-FUTURES&limit=100"
-
     try:
         res = requests.get(url).json()
     except:
         return []
-
-    if 'data' not in res:
-        return []
-
-    return res['data']
+    return res.get("data", [])
 
 # ================= INDICATORS =================
 def ema(data, period=50):
@@ -53,16 +45,15 @@ def rsi(data):
     deltas = np.diff(data)
     gain = np.mean([x for x in deltas if x > 0]) if len(deltas) else 0
     loss = abs(np.mean([x for x in deltas if x < 0])) if len(deltas) else 0
-
     if loss == 0:
         return 100
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# ================= AI SCANNER =================
+# ================= AI SIGNAL =================
 def analyze(symbol):
     candles = get_candles(symbol)
-    if not candles or len(candles) < 50:
+    if len(candles) < 50:
         return None
 
     closes = [float(x[4]) for x in candles]
@@ -76,13 +67,11 @@ def analyze(symbol):
     ema50 = ema(closes, 50)
     rsi_val = rsi(closes)
 
-    # LIQUIDITY SWEEP
     if current < prev_low and rsi_val < 30:
         return "LONG"
     if current > prev_high and rsi_val > 70:
         return "SHORT"
 
-    # TREND
     if current > ema50 and rsi_val > 55:
         return "LONG"
     if current < ema50 and rsi_val < 45:
@@ -90,19 +79,15 @@ def analyze(symbol):
 
     return None
 
-# ================= POSITION SIZE =================
+# ================= SIZE =================
 def calc_size(balance, price):
-    if price <= 0:
-        return 0
-
-    risk_amount = balance * RISK_PER_TRADE
-    size = risk_amount / price
-
+    size = (balance * RISK_PER_TRADE) / price
     return round(max(size, 0.001), 3)
 
-# ================= ORDER (V2 FIXED) =================
-def place_order(symbol, side, size):
-    if size <= 0:
+# ================= ORDER =================
+def place_order(symbol, side, size, sl, tp):
+    if not API_KEY:
+        print("API KEY MISSING!")
         return
 
     endpoint = "/api/v2/mix/order/place-order"
@@ -116,7 +101,8 @@ def place_order(symbol, side, size):
         "size": str(size),
         "side": "buy" if side == "LONG" else "sell",
         "orderType": "market",
-        "force": "gtc"
+        "presetStopLossPrice": str(sl),
+        "presetTakeProfitPrice": str(tp)
     }
 
     timestamp = str(int(time.time() * 1000))
@@ -131,17 +117,8 @@ def place_order(symbol, side, size):
         "Content-Type": "application/json"
     }
 
-    try:
-        res = requests.post(url, headers=headers, data=json.dumps(body))
-        print("ORDER:", res.json())
-    except Exception as e:
-        print("ORDER ERROR:", e)
-
-# ================= HEDGE ENGINE =================
-def hedge(symbol, side, size):
-    hedge_side = "SHORT" if side == "LONG" else "LONG"
-    hedge_size = size * 0.5
-    place_order(symbol, hedge_side, hedge_size)
+    res = requests.post(url, headers=headers, data=json.dumps(body))
+    print("ORDER:", res.json())
 
 # ================= MAIN =================
 def run_bot():
@@ -156,22 +133,30 @@ def run_bot():
             if trades >= MAX_TRADES:
                 break
 
+            if symbol in open_positions:
+                continue
+
             signal = analyze(symbol)
             if not signal:
                 continue
 
             candles = get_candles(symbol)
-            if not candles:
-                continue
-
             price = float(candles[-1][4])
             size = calc_size(balance, price)
 
-            print(f"{symbol} | {signal} | Price: {price} | Size: {size}")
+            # SL TP LOGIC
+            if signal == "LONG":
+                sl = price * 0.98
+                tp = price * 1.04
+            else:
+                sl = price * 1.02
+                tp = price * 0.96
 
-            place_order(symbol, signal, size)
-            hedge(symbol, signal, size)
+            print(f"{symbol} | {signal} | Price: {price} | SL: {sl} | TP: {tp}")
 
+            place_order(symbol, signal, size, sl, tp)
+
+            open_positions[symbol] = signal
             trades += 1
 
         time.sleep(60)
