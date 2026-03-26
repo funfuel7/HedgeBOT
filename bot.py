@@ -1,5 +1,5 @@
 # =============================================
-# ⚔️ BOT V19 (REAL POSITION TRACKING ENGINE)
+# ⚔️ BOT V19 FINAL (STABLE + REAL BALANCE FIXED)
 # =============================================
 
 import requests, time, hmac, hashlib, base64, json, os
@@ -34,27 +34,52 @@ def headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# ================= BALANCE =================
+# ================= BALANCE (FIXED) =================
 def get_balance():
     endpoint = "/api/v2/mix/account/accounts?productType=USDT-FUTURES"
     url = BASE_URL + endpoint
+
     try:
         res = requests.get(url, headers=headers("GET", endpoint)).json()
-        return float(res["data"][0]["available"])
-    except:
+
+        print("BALANCE RAW:", res)
+
+        if res.get("code") != "00000":
+            return 0
+
+        data = res.get("data", [])
+        if not data:
+            return 0
+
+        acc = data[0]
+
+        if "available" in acc:
+            return float(acc["available"])
+
+        if "crossMaxAvailable" in acc:
+            return float(acc["crossMaxAvailable"])
+
         return 0
 
-# ================= POSITIONS (KEY UPGRADE) =================
+    except Exception as e:
+        print("BALANCE ERROR:", e)
+        return 0
+
+# ================= POSITIONS =================
 def get_positions():
     endpoint = "/api/v2/mix/position/all-position?productType=USDT-FUTURES"
     url = BASE_URL + endpoint
 
     try:
         res = requests.get(url, headers=headers("GET", endpoint)).json()
+
+        if res.get("code") != "00000":
+            return {}
+
         positions = {}
 
         for p in res.get("data", []):
-            size = float(p["total"])
+            size = float(p.get("total", 0))
             if size == 0:
                 continue
 
@@ -69,7 +94,9 @@ def get_positions():
             }
 
         return positions
-    except:
+
+    except Exception as e:
+        print("POSITION ERROR:", e)
         return {}
 
 # ================= MARKET =================
@@ -83,7 +110,8 @@ def get_candles(symbol):
 # ================= SIGNAL =================
 def analyze(symbol):
     c = get_candles(symbol)
-    if len(c) < 50: return None
+    if len(c) < 50:
+        return None
 
     closes = [float(x[4]) for x in c]
     highs = [float(x[2]) for x in c]
@@ -108,8 +136,11 @@ def size_calc(balance, price):
     leverage = 3
     allocation = 0.04
 
+    # SAFE BUFFER
     position_value = balance * allocation * 0.7
-    return round((position_value * leverage) / price, 3)
+
+    size = (position_value * leverage) / price
+    return round(size, 3)
 
 # ================= ORDER =================
 def place_order(symbol, side, size):
@@ -128,9 +159,10 @@ def place_order(symbol, side, size):
 
     try:
         res = requests.post(url, headers=headers("POST", endpoint, body), data=body).json()
-        print(res)
+        print("ORDER:", res)
         return res
-    except:
+    except Exception as e:
+        print("ORDER ERROR:", e)
         return None
 
 # ================= CLOSE =================
@@ -152,66 +184,75 @@ def close_position(symbol, side, size):
     try:
         res = requests.post(url, headers=headers("POST", endpoint, body), data=body).json()
         print("CLOSED:", res)
-    except:
-        print("CLOSE ERROR")
+    except Exception as e:
+        print("CLOSE ERROR:", e)
 
 # ================= MAIN =================
 def run():
-    print("BOT V19 STARTED...")
+    print("🚀 BOT V19 FINAL STARTED...")
 
     while True:
+        try:
+            balance = get_balance()
+            print("AVAILABLE BALANCE:", balance)
 
-        balance = get_balance()
-        print("BALANCE:", balance)
+            positions = get_positions()
+            print("ACTIVE POSITIONS:", list(positions.keys()))
 
-        positions = get_positions()
-        print("ACTIVE POSITIONS:", list(positions.keys()))
-
-        # ===== EXIT (REAL POSITIONS) =====
-        for s, pos in positions.items():
-
-            candles = get_candles(s)
-            price = float(candles[-1][4])
-
-            entry = pos["entry"]
-            side = pos["side"]
-            size = pos["size"]
-
-            pnl = ((price-entry)/entry)*100 if side=="LONG" else ((entry-price)/entry)*100
-
-            print(f"{s} PNL: {pnl:.2f}%")
-
-            if pnl >= 2:
-                print(f"{s} TAKE PROFIT")
-                close_position(s, side, size)
-
-            elif pnl <= -1.5:
-                print(f"{s} STOP LOSS")
-                close_position(s, side, size)
-
-        # ===== ENTRY =====
-        if len(positions) < MAX_TRADES and balance > 20:
-
-            for s in SYMBOLS:
-
-                if s in positions:
-                    continue
-
-                signal = analyze(s)
-                if not signal:
-                    continue
-
+            # ===== EXIT =====
+            for s, pos in positions.items():
                 candles = get_candles(s)
+                if not candles:
+                    continue
+
                 price = float(candles[-1][4])
+                entry = pos["entry"]
+                side = pos["side"]
+                size = pos["size"]
 
-                size = size_calc(balance, price)
+                pnl = ((price-entry)/entry)*100 if side=="LONG" else ((entry-price)/entry)*100
 
-                print(f"{s} | {signal} | {price} | size {size}")
+                print(f"{s} PNL: {pnl:.2f}%")
 
-                res = place_order(s, signal, size)
+                if pnl >= 2:
+                    print(f"{s} TAKE PROFIT")
+                    close_position(s, side, size)
 
-                if res and res.get("code") == "00000":
-                    break
+                elif pnl <= -1.5:
+                    print(f"{s} STOP LOSS")
+                    close_position(s, side, size)
+
+            # ===== ENTRY =====
+            if len(positions) < MAX_TRADES and balance > 20:
+
+                for s in SYMBOLS:
+
+                    if s in positions:
+                        continue
+
+                    signal = analyze(s)
+                    if not signal:
+                        continue
+
+                    candles = get_candles(s)
+                    if not candles:
+                        continue
+
+                    price = float(candles[-1][4])
+                    size = size_calc(balance, price)
+
+                    print(f"{s} | {signal} | {price} | size {size}")
+
+                    res = place_order(s, signal, size)
+
+                    if res and res.get("code") == "00000":
+                        break
+
+            else:
+                print("LOW BALANCE OR MAX TRADES → SKIP ENTRY")
+
+        except Exception as e:
+            print("MAIN LOOP ERROR:", e)
 
         time.sleep(30)
 
