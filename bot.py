@@ -1,5 +1,5 @@
 # =============================================
-# ⚔️ BOT V13 (CLEAN COMPOUNDING MACHINE)
+# ⚔️ BOT V14 (SMART COMPOUNDING ENGINE)
 # =============================================
 
 import requests, time, hmac, hashlib, base64, json, os
@@ -27,7 +27,10 @@ MIN_SIZE = {
 
 open_positions = {}
 MAX_TRADES = 3
-RISK = 0.01
+
+# 🔥 SMART STATE
+win_streak = 0
+loss_streak = 0
 
 # ================= AUTH =================
 def sign(msg):
@@ -48,14 +51,9 @@ def get_candles(symbol):
 # ================= CHOP FILTER =================
 def is_choppy(candles):
     closes = [float(x[4]) for x in candles]
-
     recent_range = max(closes[-10:]) - min(closes[-10:])
-    avg_range = np.mean([abs(closes[i]-closes[i-1]) for i in range(-20, -1)])
-
-    if recent_range < avg_range * 1.2:
-        return True
-
-    return False
+    avg_move = np.mean([abs(closes[i]-closes[i-1]) for i in range(-20, -1)])
+    return recent_range < avg_move * 1.2
 
 # ================= SIGNAL =================
 def analyze(symbol):
@@ -63,7 +61,6 @@ def analyze(symbol):
     if len(c) < 50: return None
 
     if is_choppy(c):
-        print(symbol, "CHOPPY → SKIP")
         return None
 
     closes = [float(x[4]) for x in c]
@@ -73,7 +70,6 @@ def analyze(symbol):
     price = closes[-1]
     ema50 = np.mean(closes[-50:])
 
-    # SIMPLE & EFFECTIVE LOGIC
     if price < min(lows[-10:-1]):
         return "LONG"
 
@@ -88,9 +84,26 @@ def analyze(symbol):
 
     return None
 
-# ================= SIZE =================
+# ================= SMART SIZE =================
 def size_calc(symbol, balance, price):
-    size = (balance * RISK) / price
+    global win_streak, loss_streak
+
+    leverage = 3
+
+    # 🔥 BASE ALLOCATION
+    allocation = 0.12
+
+    # 🔥 WIN BOOST
+    if win_streak >= 2:
+        allocation = min(0.18, allocation + 0.02 * win_streak)
+
+    # 🔥 LOSS PROTECTION
+    if loss_streak >= 2:
+        allocation = max(0.06, allocation - 0.03 * loss_streak)
+
+    position_value = balance * allocation
+    size = (position_value * leverage) / price
+
     return max(round(size, 3), MIN_SIZE[symbol])
 
 # ================= ORDER =================
@@ -153,11 +166,12 @@ def close_position(symbol, side, size):
         "Content-Type": "application/json"
     }
 
-    res = requests.post(url, headers=headers, data=json.dumps(body))
-    print("CLOSED:", res.json())
+    return requests.post(url, headers=headers, data=json.dumps(body)).json()
 
 # ================= MAIN =================
 def run():
+    global win_streak, loss_streak
+
     balance = 1000
 
     print("BOT STARTED...")
@@ -211,10 +225,18 @@ def run():
                 close_position(s, side, size)
                 del open_positions[s]
 
+                win_streak += 1
+                loss_streak = 0
+
             elif pnl <= -1.5:
                 print(f"{s} STOP LOSS")
                 close_position(s, side, size)
                 del open_positions[s]
+
+                loss_streak += 1
+                win_streak = 0
+
+        print(f"WIN STREAK: {win_streak} | LOSS STREAK: {loss_streak}")
 
         time.sleep(30)
 
