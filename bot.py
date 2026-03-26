@@ -1,5 +1,5 @@
 # =============================================
-# ⚔️ BOT V15 (STABLE + SIZE FIXED + COMPOUNDING)
+# ⚔️ BOT V16 (PRECISION FIX + SIZE FIX + STABLE)
 # =============================================
 
 import requests, time, hmac, hashlib, base64, json, os
@@ -28,7 +28,6 @@ MIN_SIZE = {
 open_positions = {}
 MAX_TRADES = 3
 
-# 🔥 PERFORMANCE TRACKING
 win_streak = 0
 loss_streak = 0
 
@@ -38,7 +37,9 @@ def sign(msg):
         hmac.new(API_SECRET.encode(), msg.encode(), hashlib.sha256).digest()
     ).decode()
 
-def round_price(p): return round(p, 3)
+# ================= PRICE PRECISION FIX =================
+def round_price(p):
+    return float(f"{p:.2f}")   # 🔥 FIXED (prevents BNB error)
 
 # ================= MARKET =================
 def get_candles(symbol):
@@ -85,32 +86,25 @@ def analyze(symbol):
 
     return None
 
-# ================= SIZE (FIXED) =================
+# ================= SIZE FIX =================
 def size_calc(symbol, balance, price):
     global win_streak, loss_streak
 
     leverage = 3
 
-    # 🔥 BASE SAFE ALLOCATION
-    allocation = 0.08   # 8% base
+    allocation = 0.08
 
-    # 🔥 WIN BOOST
     if win_streak >= 2:
         allocation = min(0.12, allocation + 0.01 * win_streak)
 
-    # 🔥 LOSS PROTECTION
     if loss_streak >= 2:
         allocation = max(0.04, allocation - 0.02 * loss_streak)
 
-    # 🔥 HARD CAP (VERY IMPORTANT)
-    max_capital = balance * 0.15  # never exceed 15%
-
+    max_capital = balance * 0.15
     position_value = min(balance * allocation, max_capital)
 
-    # 🔥 SIZE CALCULATION
     size = (position_value * leverage) / price
 
-    # 🔥 FINAL SAFETY CHECK
     if size * price > balance * 0.5:
         return None
 
