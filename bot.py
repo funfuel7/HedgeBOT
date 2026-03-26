@@ -1,5 +1,5 @@
 # =============================================
-# ⚔️ FINAL BOT V8 (TRAILING + BREAKEVEN + HEDGE)
+# ⚔️ BOT V9 (REAL TRAILING SL + FIXED SIZE)
 # =============================================
 
 import requests, time, hmac, hashlib, base64, json, os
@@ -10,11 +10,15 @@ API_SECRET = os.getenv("API_SECRET")
 PASSPHRASE = os.getenv("PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 
-CRYPTO = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT"]
-STOCKS = ["NAS100USDT","SPXUSDT"]
-METALS = ["XAUUSDT","XAGUSDT"]
+SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT"]
 
-SYMBOLS = CRYPTO + STOCKS + METALS
+# minimum sizes (IMPORTANT FIX)
+MIN_SIZE = {
+    "BTCUSDT": 0.001,
+    "ETHUSDT": 0.01,
+    "SOLUSDT": 0.1,
+    "BNBUSDT": 0.01
+}
 
 open_positions = {}
 MAX_TRADES = 3
@@ -28,7 +32,7 @@ def sign(msg):
 
 def round_price(p): return round(p, 3)
 
-# ================= DATA =================
+# ================= MARKET =================
 def get_candles(symbol):
     url = f"{BASE_URL}/api/v2/mix/market/candles?symbol={symbol}&granularity=5m&productType=USDT-FUTURES&limit=100"
     try:
@@ -47,17 +51,21 @@ def analyze(symbol):
 
     price = closes[-1]
     ema50 = np.mean(closes[-50:])
-    rsi = 100 - (100/(1 + np.mean([x for x in np.diff(closes) if x>0]) / (abs(np.mean([x for x in np.diff(closes) if x<0]))+1e-6)))
 
-    if price < min(lows[-10:-1]) and rsi < 30: return "LONG"
-    if price > max(highs[-10:-1]) and rsi > 70: return "SHORT"
+    if price < min(lows[-10:-1]): return "LONG"
+    if price > max(highs[-10:-1]): return "SHORT"
 
     if price > ema50: return "LONG"
     if price < ema50: return "SHORT"
 
     return None
 
-# ================= ORDER =================
+# ================= SIZE =================
+def size_calc(symbol, balance, price):
+    size = (balance * RISK) / price
+    return max(round(size, 3), MIN_SIZE[symbol])
+
+# ================= PLACE ORDER =================
 def place_order(symbol, side, size, sl):
     endpoint = "/api/v2/mix/order/place-order"
     url = BASE_URL + endpoint
@@ -87,9 +95,34 @@ def place_order(symbol, side, size, sl):
 
     return requests.post(url, headers=headers, data=json.dumps(body)).json()
 
-# ================= POSITION SIZE =================
-def size_calc(balance, price):
-    return round(max((balance*RISK)/price, 0.001),3)
+# ================= MODIFY SL (REAL TRAILING) =================
+def update_sl(symbol, new_sl):
+    endpoint = "/api/v2/mix/order/place-tpsl-order"
+    url = BASE_URL + endpoint
+
+    body = {
+        "symbol": symbol,
+        "productType": "USDT-FUTURES",
+        "marginCoin": "USDT",
+        "planType": "loss_plan",
+        "triggerPrice": str(round_price(new_sl)),
+        "executePrice": str(round_price(new_sl))
+    }
+
+    ts = str(int(time.time()*1000))
+    msg = ts+"POST"+endpoint+json.dumps(body)
+    sig = sign(msg)
+
+    headers = {
+        "ACCESS-KEY": API_KEY,
+        "ACCESS-SIGN": sig,
+        "ACCESS-TIMESTAMP": ts,
+        "ACCESS-PASSPHRASE": PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+
+    res = requests.post(url, headers=headers, data=json.dumps(body))
+    print("SL UPDATED:", res.json())
 
 # ================= MAIN =================
 def run():
@@ -98,6 +131,8 @@ def run():
     print("BOT STARTED...")
 
     while True:
+
+        # ===== ENTRY =====
         for s in SYMBOLS:
 
             if len(open_positions) >= MAX_TRADES: break
@@ -108,25 +143,24 @@ def run():
 
             candles = get_candles(s)
             price = float(candles[-1][4])
-            size = size_calc(balance, price)
 
-            if signal=="LONG":
-                sl = price*0.98
-            else:
-                sl = price*1.02
+            size = size_calc(s, balance, price)
 
-            print(f"{s} | {signal} | {price}")
+            sl = price * 0.98 if signal=="LONG" else price * 1.02
+
+            print(f"{s} | {signal} | {price} | size {size}")
 
             res = place_order(s, signal, size, sl)
             print(res)
 
-            open_positions[s] = {
-                "side": signal,
-                "entry": price,
-                "sl": sl
-            }
+            if res.get("code") == "00000":
+                open_positions[s] = {
+                    "side": signal,
+                    "entry": price,
+                    "sl": sl
+                }
 
-        # ================= TRAILING + BREAKEVEN =================
+        # ===== TRAILING =====
         for s in list(open_positions.keys()):
             candles = get_candles(s)
             price = float(candles[-1][4])
@@ -135,22 +169,17 @@ def run():
             entry = pos["entry"]
             side = pos["side"]
 
-            # breakeven
-            if side=="LONG" and price > entry*1.01:
-                pos["sl"] = entry
-            if side=="SHORT" and price < entry*0.99:
-                pos["sl"] = entry
-
-            # trailing
-            if side=="LONG":
-                new_sl = price*0.98
+            if side == "LONG":
+                new_sl = price * 0.98
                 if new_sl > pos["sl"]:
                     pos["sl"] = new_sl
+                    update_sl(s, new_sl)
 
-            if side=="SHORT":
-                new_sl = price*1.02
+            if side == "SHORT":
+                new_sl = price * 1.02
                 if new_sl < pos["sl"]:
                     pos["sl"] = new_sl
+                    update_sl(s, new_sl)
 
         time.sleep(60)
 
