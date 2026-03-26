@@ -1,5 +1,5 @@
 # =============================================
-# ⚔️ BOT V16 (PRECISION FIX + SIZE FIX + STABLE)
+# ⚔️ BOT V17 (PRO STABLE EXECUTION ENGINE)
 # =============================================
 
 import requests, time, hmac, hashlib, base64, json, os
@@ -25,6 +25,17 @@ MIN_SIZE = {
     "ENAUSDT": 1
 }
 
+# 🔥 HARD CAPS (FINAL FIX FOR LOW PRICE COINS)
+MAX_SIZE = {
+    "BTCUSDT": 0.01,
+    "ETHUSDT": 0.5,
+    "SOLUSDT": 10,
+    "BNBUSDT": 1,
+    "XLMUSDT": 500,
+    "ZECUSDT": 2,
+    "ENAUSDT": 800
+}
+
 open_positions = {}
 MAX_TRADES = 3
 
@@ -37,9 +48,8 @@ def sign(msg):
         hmac.new(API_SECRET.encode(), msg.encode(), hashlib.sha256).digest()
     ).decode()
 
-# ================= PRICE PRECISION FIX =================
 def round_price(p):
-    return float(f"{p:.2f}")   # 🔥 FIXED (prevents BNB error)
+    return float(f"{p:.2f}")
 
 # ================= MARKET =================
 def get_candles(symbol):
@@ -50,8 +60,8 @@ def get_candles(symbol):
         return []
 
 # ================= CHOP FILTER =================
-def is_choppy(candles):
-    closes = [float(x[4]) for x in candles]
+def is_choppy(c):
+    closes = [float(x[4]) for x in c]
     recent_range = max(closes[-10:]) - min(closes[-10:])
     avg_move = np.mean([abs(closes[i]-closes[i-1]) for i in range(-20, -1)])
     return recent_range < avg_move * 1.2
@@ -74,24 +84,20 @@ def analyze(symbol):
 
     if price < min(lows[-10:-1]):
         return "LONG"
-
     if price > max(highs[-10:-1]):
         return "SHORT"
-
     if price > ema50:
         return "LONG"
-
     if price < ema50:
         return "SHORT"
 
     return None
 
-# ================= SIZE FIX =================
+# ================= SIZE =================
 def size_calc(symbol, balance, price):
     global win_streak, loss_streak
 
     leverage = 3
-
     allocation = 0.08
 
     if win_streak >= 2:
@@ -100,15 +106,15 @@ def size_calc(symbol, balance, price):
     if loss_streak >= 2:
         allocation = max(0.04, allocation - 0.02 * loss_streak)
 
-    max_capital = balance * 0.15
-    position_value = min(balance * allocation, max_capital)
-
+    position_value = balance * allocation
     size = (position_value * leverage) / price
+
+    size = min(size, MAX_SIZE[symbol])
+
+    size = round(size, 3)
 
     if size * price > balance * 0.5:
         return None
-
-    size = round(size, 3)
 
     return max(size, MIN_SIZE[symbol])
 
@@ -140,7 +146,12 @@ def place_order(symbol, side, size, sl):
         "Content-Type": "application/json"
     }
 
-    return requests.post(url, headers=headers, data=json.dumps(body)).json()
+    try:
+        res = requests.post(url, headers=headers, data=json.dumps(body)).json()
+    except:
+        return None
+
+    return res
 
 # ================= CLOSE =================
 def close_position(symbol, side, size):
@@ -172,10 +183,11 @@ def close_position(symbol, side, size):
         "Content-Type": "application/json"
     }
 
-    res = requests.post(url, headers=headers, data=json.dumps(body))
-    print("CLOSED:", res.json())
-
-    return res.json()
+    try:
+        res = requests.post(url, headers=headers, data=json.dumps(body)).json()
+        print("CLOSED:", res)
+    except:
+        print("CLOSE ERROR")
 
 # ================= MAIN =================
 def run():
@@ -187,14 +199,23 @@ def run():
 
     while True:
 
+        order_placed = False
+
         # ENTRY
         for s in SYMBOLS:
 
-            if len(open_positions) >= MAX_TRADES: break
-            if s in open_positions: continue
+            if order_placed:
+                break
+
+            if len(open_positions) >= MAX_TRADES:
+                break
+
+            if s in open_positions:
+                continue
 
             signal = analyze(s)
-            if not signal: continue
+            if not signal:
+                continue
 
             candles = get_candles(s)
             price = float(candles[-1][4])
@@ -210,6 +231,12 @@ def run():
             print(f"{s} | {signal} | {price} | size {size}")
 
             res = place_order(s, signal, size, sl)
+
+            # 🔥 STRICT RESPONSE CHECK
+            if not res or "code" not in res:
+                print(f"{s} ERROR: No API response")
+                continue
+
             print(res)
 
             if res.get("code") == "00000":
@@ -218,6 +245,8 @@ def run():
                     "entry": price,
                     "size": size
                 }
+                order_placed = True
+                time.sleep(1)
 
         # EXIT
         for s in list(open_positions.keys()):
@@ -237,7 +266,6 @@ def run():
                 print(f"{s} TAKE PROFIT")
                 close_position(s, side, size)
                 del open_positions[s]
-
                 win_streak += 1
                 loss_streak = 0
 
@@ -245,7 +273,6 @@ def run():
                 print(f"{s} STOP LOSS")
                 close_position(s, side, size)
                 del open_positions[s]
-
                 loss_streak += 1
                 win_streak = 0
 
