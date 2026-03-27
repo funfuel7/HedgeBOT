@@ -1,276 +1,193 @@
-# =============================================
-# ⚔️ BOT V20 (SAFE COMPOUNDING ENGINE)
-# =============================================
+# =========================================================
+# 🚀 BITGET V20 DEBUG BOT (FULL DIAGNOSTIC MODE)
+# =========================================================
 
-import requests, time, hmac, hashlib, base64, json, os
-import numpy as np
+import requests
+import time
+import hmac
+import hashlib
+import base64
+import json
 
-API_KEY = os.getenv("API_KEY")
-API_SECRET = os.getenv("API_SECRET")
-PASSPHRASE = os.getenv("PASSPHRASE")
+# ================= CONFIG =================
+API_KEY = "YOUR_API_KEY"
+API_SECRET = "YOUR_API_SECRET"
+PASSPHRASE = "YOUR_PASSPHRASE"
+
 BASE_URL = "https://api.bitget.com"
 
-SYMBOLS = [
-    "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
-    "XLMUSDT","ZECUSDT","ENAUSDT"
-]
+# ==========================================
 
-MAX_TRADES = 3
+def sign(timestamp, method, request_path, body=""):
+    message = str(timestamp) + method + request_path + body
+    mac = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256)
+    return base64.b64encode(mac.digest()).decode()
 
-# ================= AUTH =================
-def sign(msg):
-    return base64.b64encode(
-        hmac.new(API_SECRET.encode(), msg.encode(), hashlib.sha256).digest()
-    ).decode()
 
-def headers(method, endpoint, body=""):
-    ts = str(int(time.time()*1000))
-    msg = ts + method + endpoint + body
+def get_headers(method, path, body=""):
+    timestamp = str(int(time.time() * 1000))
+    signature = sign(timestamp, method, path, body)
+
     return {
         "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": sign(msg),
-        "ACCESS-TIMESTAMP": ts,
+        "ACCESS-SIGN": signature,
+        "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": PASSPHRASE,
         "Content-Type": "application/json"
     }
 
-# ================= BALANCE =================
-def get_balance():
-    endpoint = "/api/v2/mix/account/accounts?productType=USDT-FUTURES"
-    url = BASE_URL + endpoint
+
+# =========================================================
+# 🔍 DEBUG FUNCTIONS
+# =========================================================
+
+def test_server():
+    print("\n🌐 TESTING SERVER CONNECTION...")
+    try:
+        res = requests.get(BASE_URL + "/api/spot/v1/public/time")
+        print("✅ Server reachable:", res.text)
+    except Exception as e:
+        print("❌ Server connection failed:", e)
+
+
+def test_balance():
+    print("\n💰 CHECKING FUTURES BALANCE...")
+
+    path = "/api/mix/v1/account/accounts"
+    url = BASE_URL + path
+
+    headers = get_headers("GET", path)
 
     try:
-        res = requests.get(url, headers=headers("GET", endpoint)).json()
-        print("BALANCE RAW:", res)
+        res = requests.get(url, headers=headers)
+        data = res.json()
 
-        if res.get("code") != "00000":
-            return 0
+        print("RAW RESPONSE:", data)
 
-        data = res.get("data", [])
-        if not data:
-            return 0
+        if data.get("code") == "00000":
+            balances = data.get("data", [])
+            for b in balances:
+                if b.get("marginCoin") == "USDT":
+                    print(f"✅ AVAILABLE BALANCE: {b.get('available')}")
+                    return
+            print("⚠️ No USDT futures balance found")
 
-        acc = data[0]
-
-        if "available" in acc:
-            return float(acc["available"])
-
-        if "crossMaxAvailable" in acc:
-            return float(acc["crossMaxAvailable"])
-
-        return 0
+        else:
+            explain_error(data)
 
     except Exception as e:
-        print("BALANCE ERROR:", e)
-        return 0
+        print("❌ Balance request failed:", e)
 
-# ================= POSITIONS =================
-def get_positions():
-    endpoint = "/api/v2/mix/position/all-position?productType=USDT-FUTURES"
-    url = BASE_URL + endpoint
+
+def test_positions():
+    print("\n📊 CHECKING OPEN POSITIONS...")
+
+    path = "/api/mix/v1/position/allPosition"
+    url = BASE_URL + path
+
+    headers = get_headers("GET", path)
 
     try:
-        res = requests.get(url, headers=headers("GET", endpoint)).json()
+        res = requests.get(url, headers=headers)
+        data = res.json()
 
-        if res.get("code") != "00000":
-            return {}
+        print("RAW RESPONSE:", data)
 
-        positions = {}
+        if data.get("code") == "00000":
+            positions = data.get("data", [])
+            print(f"✅ TOTAL POSITIONS: {len(positions)}")
 
-        for p in res.get("data", []):
-            size = float(p.get("total", 0))
-            if size == 0:
-                continue
+            for p in positions:
+                if float(p.get("total", 0)) > 0:
+                    print(f"👉 {p.get('symbol')} | size: {p.get('total')}")
 
-            symbol = p["symbol"]
-            entry = float(p["openPriceAvg"])
-            side = "LONG" if p["holdSide"] == "long" else "SHORT"
-
-            positions[symbol] = {
-                "entry": entry,
-                "side": side,
-                "size": size
-            }
-
-        return positions
+        else:
+            explain_error(data)
 
     except Exception as e:
-        print("POSITION ERROR:", e)
-        return {}
+        print("❌ Position request failed:", e)
 
-# ================= MARKET =================
-def get_candles(symbol):
-    url = f"{BASE_URL}/api/v2/mix/market/candles?symbol={symbol}&granularity=5m&productType=USDT-FUTURES&limit=100"
-    try:
-        return requests.get(url).json().get("data", [])
-    except:
-        return []
 
-# ================= SIGNAL =================
-def analyze(symbol):
-    c = get_candles(symbol)
-    if len(c) < 50:
-        return None
+def test_order_permission():
+    print("\n⚔️ TESTING ORDER PERMISSION (SAFE TEST)...")
 
-    closes = [float(x[4]) for x in c]
-    highs = [float(x[2]) for x in c]
-    lows = [float(x[3]) for x in c]
-
-    price = closes[-1]
-    ema50 = np.mean(closes[-50:])
-
-    if price < min(lows[-10:-1]):
-        return "LONG"
-    if price > max(highs[-10:-1]):
-        return "SHORT"
-    if price > ema50:
-        return "LONG"
-    if price < ema50:
-        return "SHORT"
-
-    return None
-
-# ================= SAFE SIZE =================
-def size_calc(balance, price):
-    leverage = 3
-
-    # 🔥 SAFE ALLOCATION
-    allocation = 0.02  # 2%
-
-    if balance > 100:
-        allocation = 0.03
-    if balance > 300:
-        allocation = 0.04
-
-    position_value = balance * allocation
-
-    # HARD CAP
-    max_position_value = balance * 0.25
-    if position_value > max_position_value:
-        position_value = max_position_value
-
-    size = (position_value * leverage) / price
-
-    return round(size, 3)
-
-# ================= ORDER =================
-def place_order(symbol, side, size):
-    endpoint = "/api/v2/mix/order/place-order"
-    url = BASE_URL + endpoint
+    path = "/api/mix/v1/order/placeOrder"
+    url = BASE_URL + path
 
     body = json.dumps({
-        "symbol": symbol,
-        "productType": "USDT-FUTURES",
-        "marginMode": "crossed",
+        "symbol": "BTCUSDT",
         "marginCoin": "USDT",
-        "size": str(size),
-        "side": "buy" if side=="LONG" else "sell",
-        "orderType": "market"
-    })
-
-    try:
-        res = requests.post(url, headers=headers("POST", endpoint, body), data=body).json()
-        print("ORDER:", res)
-        return res
-    except Exception as e:
-        print("ORDER ERROR:", e)
-        return None
-
-# ================= CLOSE =================
-def close_position(symbol, side, size):
-    endpoint = "/api/v2/mix/order/place-order"
-    url = BASE_URL + endpoint
-
-    body = json.dumps({
-        "symbol": symbol,
-        "productType": "USDT-FUTURES",
-        "marginMode": "crossed",
-        "marginCoin": "USDT",
-        "size": str(size),
-        "side": "sell" if side=="LONG" else "buy",
+        "size": "0.001",
+        "side": "open_long",
         "orderType": "market",
-        "reduceOnly": "true"
+        "timeInForceValue": "normal"
     })
 
+    headers = get_headers("POST", path, body)
+
     try:
-        res = requests.post(url, headers=headers("POST", endpoint, body), data=body).json()
-        print("CLOSED:", res)
+        res = requests.post(url, headers=headers, data=body)
+        data = res.json()
+
+        print("RAW RESPONSE:", data)
+
+        if data.get("code") == "00000":
+            print("✅ ORDER PERMISSION WORKING")
+        else:
+            explain_error(data)
+
     except Exception as e:
-        print("CLOSE ERROR:", e)
+        print("❌ Order test failed:", e)
 
-# ================= MAIN =================
-def run():
-    print("🚀 BOT V20 STARTED...")
 
-    while True:
-        try:
-            balance = get_balance()
-            print("AVAILABLE BALANCE:", balance)
+# =========================================================
+# 🧠 ERROR EXPLAINER (IMPORTANT)
+# =========================================================
 
-            positions = get_positions()
-            print("ACTIVE POSITIONS:", list(positions.keys()))
+def explain_error(data):
+    code = data.get("code")
+    msg = data.get("msg")
 
-            # ===== EXIT =====
-            for s, pos in positions.items():
-                candles = get_candles(s)
-                if not candles:
-                    continue
+    print(f"\n❌ ERROR CODE: {code}")
+    print(f"❌ MESSAGE: {msg}")
 
-                price = float(candles[-1][4])
-                entry = pos["entry"]
-                side = pos["side"]
-                size = pos["size"]
+    if code == "40014":
+        print("👉 FIX: Enable Futures (Contract) permission OR remove IP restriction")
 
-                pnl = ((price-entry)/entry)*100 if side=="LONG" else ((entry-price)/entry)*100
+    elif code == "40037":
+        print("👉 FIX: API key invalid")
 
-                print(f"{s} PNL: {pnl:.2f}%")
+    elif code == "40762":
+        print("👉 FIX: Order size too big for your balance")
 
-                if pnl >= 2:
-                    print(f"{s} TAKE PROFIT")
-                    close_position(s, side, size)
+    elif code == "45115":
+        print("👉 FIX: Price/size precision issue")
 
-                elif pnl <= -1.5:
-                    print(f"{s} STOP LOSS")
-                    close_position(s, side, size)
+    elif code == "30032":
+        print("👉 FIX: Using deprecated API version")
 
-            # ===== ENTRY =====
-            if len(positions) < MAX_TRADES and balance > 20:
+    else:
+        print("👉 UNKNOWN ERROR — CHECK API SETTINGS")
 
-                for s in SYMBOLS:
 
-                    if s in positions:
-                        continue
+# =========================================================
+# 🚀 RUN ALL TESTS
+# =========================================================
 
-                    signal = analyze(s)
-                    if not signal:
-                        continue
+def run_debug():
+    print("\n==============================")
+    print("🚀 BITGET V20 DEBUG STARTED")
+    print("==============================")
 
-                    candles = get_candles(s)
-                    if not candles:
-                        continue
+    test_server()
+    test_balance()
+    test_positions()
+    test_order_permission()
 
-                    price = float(candles[-1][4])
-                    size = size_calc(balance, price)
+    print("\n==============================")
+    print("✅ DEBUG COMPLETE")
+    print("==============================")
 
-                    # 🔥 FINAL SAFETY CHECK
-                    if size * price > balance * 0.3:
-                        print(f"{s} SKIP: size too large")
-                        continue
-
-                    print(f"{s} | {signal} | {price} | size {size}")
-
-                    res = place_order(s, signal, size)
-
-                    if res and res.get("code") == "00000":
-                        break
-
-            else:
-                print("LOW BALANCE OR MAX TRADES → SKIP ENTRY")
-
-        except Exception as e:
-            print("MAIN ERROR:", e)
-
-        time.sleep(30)
 
 if __name__ == "__main__":
-    run()
+    run_debug()
