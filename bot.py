@@ -1,5 +1,5 @@
 # =============================================
-# ⚔️ BOT V18 (REAL BALANCE + SAFE COMPUNDING)
+# ⚔️ BOT V17 (PRO STABLE EXECUTION ENGINE)
 # =============================================
 
 import requests, time, hmac, hashlib, base64, json, os
@@ -25,6 +25,7 @@ MIN_SIZE = {
     "ENAUSDT": 1
 }
 
+# 🔥 HARD CAPS (FINAL FIX FOR LOW PRICE COINS)
 MAX_SIZE = {
     "BTCUSDT": 0.01,
     "ETHUSDT": 0.5,
@@ -50,28 +51,6 @@ def sign(msg):
 def round_price(p):
     return float(f"{p:.2f}")
 
-# ================= REAL BALANCE =================
-def get_balance():
-    endpoint = "/api/v2/mix/account/accounts?productType=USDT-FUTURES"
-    url = BASE_URL + endpoint
-
-    ts = str(int(time.time()*1000))
-    msg = ts + "GET" + endpoint
-    sig = sign(msg)
-
-    headers = {
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": sig,
-        "ACCESS-TIMESTAMP": ts,
-        "ACCESS-PASSPHRASE": PASSPHRASE
-    }
-
-    try:
-        res = requests.get(url, headers=headers).json()
-        return float(res["data"][0]["available"])
-    except:
-        return 0
-
 # ================= MARKET =================
 def get_candles(symbol):
     url = f"{BASE_URL}/api/v2/mix/market/candles?symbol={symbol}&granularity=5m&productType=USDT-FUTURES&limit=100"
@@ -93,6 +72,7 @@ def analyze(symbol):
     if len(c) < 50: return None
 
     if is_choppy(c):
+        print(symbol, "CHOPPY → SKIP")
         return None
 
     closes = [float(x[4]) for x in c]
@@ -113,27 +93,24 @@ def analyze(symbol):
 
     return None
 
-# ================= SAFE SIZE =================
+# ================= SIZE =================
 def size_calc(symbol, balance, price):
     global win_streak, loss_streak
 
     leverage = 3
-
-    # 🔥 safer allocation
-    allocation = 0.04
+    allocation = 0.08
 
     if win_streak >= 2:
-        allocation = min(0.06, allocation + 0.01 * win_streak)
+        allocation = min(0.12, allocation + 0.01 * win_streak)
 
     if loss_streak >= 2:
-        allocation = max(0.02, allocation - 0.01 * loss_streak)
+        allocation = max(0.04, allocation - 0.02 * loss_streak)
 
-    # 🔥 margin buffer (IMPORTANT)
-    position_value = balance * allocation * 0.7
-
+    position_value = balance * allocation
     size = (position_value * leverage) / price
 
     size = min(size, MAX_SIZE[symbol])
+
     size = round(size, 3)
 
     if size * price > balance * 0.5:
@@ -170,9 +147,11 @@ def place_order(symbol, side, size, sl):
     }
 
     try:
-        return requests.post(url, headers=headers, data=json.dumps(body)).json()
+        res = requests.post(url, headers=headers, data=json.dumps(body)).json()
     except:
         return None
+
+    return res
 
 # ================= CLOSE =================
 def close_position(symbol, side, size):
@@ -214,17 +193,11 @@ def close_position(symbol, side, size):
 def run():
     global win_streak, loss_streak
 
+    balance = 1000
+
     print("BOT STARTED...")
 
     while True:
-
-        balance = get_balance()
-        print("AVAILABLE BALANCE:", balance)
-
-        if balance < 20:
-            print("LOW BALANCE → SKIP")
-            time.sleep(30)
-            continue
 
         order_placed = False
 
@@ -259,8 +232,9 @@ def run():
 
             res = place_order(s, signal, size, sl)
 
+            # 🔥 STRICT RESPONSE CHECK
             if not res or "code" not in res:
-                print(f"{s} ERROR: No response")
+                print(f"{s} ERROR: No API response")
                 continue
 
             print(res)
