@@ -10,11 +10,14 @@ API_SECRET = os.getenv("API_SECRET")
 PASSPHRASE = os.getenv("PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 
+# ✅ UPDATED SYMBOLS
 SYMBOLS = [
     "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
-    "XLMUSDT","ZECUSDT","ENAUSDT"
+    "XLMUSDT","ZECUSDT","ENAUSDT",
+    "PAXGUSDT","PEPEUSDT","XRPUSDT","SUIUSDT"
 ]
 
+# ✅ UPDATED MIN SIZE
 MIN_SIZE = {
     "BTCUSDT": 0.001,
     "ETHUSDT": 0.01,
@@ -22,9 +25,14 @@ MIN_SIZE = {
     "BNBUSDT": 0.01,
     "XLMUSDT": 1,
     "ZECUSDT": 0.01,
-    "ENAUSDT": 1
+    "ENAUSDT": 1,
+    "PAXGUSDT": 0.01,
+    "PEPEUSDT": 1000,
+    "XRPUSDT": 1,
+    "SUIUSDT": 1
 }
 
+# ✅ UPDATED MAX SIZE
 MAX_SIZE = {
     "BTCUSDT": 0.005,
     "ETHUSDT": 0.2,
@@ -32,7 +40,11 @@ MAX_SIZE = {
     "BNBUSDT": 0.5,
     "XLMUSDT": 300,
     "ZECUSDT": 1,
-    "ENAUSDT": 400
+    "ENAUSDT": 400,
+    "PAXGUSDT": 0.1,
+    "PEPEUSDT": 10000000,
+    "XRPUSDT": 500,
+    "SUIUSDT": 300
 }
 
 open_positions = {}
@@ -94,8 +106,8 @@ def analyze(symbol):
 # ================= SIZE (SAFE VERSION) =================
 def size_calc(symbol, balance, price):
 
-    leverage = 2   # 🔥 REDUCED
-    allocation = 0.04  # 🔥 REDUCED (4%)
+    leverage = 2
+    allocation = 0.04
 
     position_value = balance * allocation
     size = (position_value * leverage) / price
@@ -103,7 +115,6 @@ def size_calc(symbol, balance, price):
     size = min(size, MAX_SIZE[symbol])
     size = round(size, 3)
 
-    # 🔥 HARD SAFETY
     if size * price > balance * 0.3:
         return None
 
@@ -182,7 +193,7 @@ def close_position(symbol, side, size):
 # ================= MAIN =================
 def run():
 
-    balance = 1000  # (Replace later with real balance API)
+    balance = 1000
 
     print("BOT STARTED...")
 
@@ -244,7 +255,7 @@ def run():
                 close_position(s, side, size)
                 del open_positions[s]
 
-        time.sleep(30)  # 🔥 SAFE LOOP
+        time.sleep(30)
 
 if __name__ == "__main__":
     run()
